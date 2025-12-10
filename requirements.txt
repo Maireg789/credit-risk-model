@@ -1,0 +1,29 @@
+# Data Manipulation and Analysis
+pandas
+numpy
+
+# Visualization
+matplotlib
+seaborn
+
+# Machine Learning & Feature Engineering
+scikit-learn
+scipy
+xverse              # For Weight of Evidence (WoE) and IV
+
+# Experiment Tracking
+mlflow
+
+# API Development
+fastapi
+uvicorn
+pydantic
+
+# Testing and Code Quality
+pytest
+flake8
+black
+
+# Notebook Environment
+jupyter
+ipykernel
