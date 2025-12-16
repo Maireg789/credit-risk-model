@@ -1,0 +1,22 @@
+artifact_path: file:C:/Users/Maireg/Documents/GitHub/credit-risk-model/mlruns/3/models/m-ec46719936f84601be96bd79642f92dc/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.7
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+mlflow_version: 3.7.0
+model_id: m-ec46719936f84601be96bd79642f92dc
+model_size_bytes: 2835
+model_uuid: m-ec46719936f84601be96bd79642f92dc
+prompts: null
+run_id: 00c2f710a01243af952fd8d109e39ad7
+utc_time_created: '2025-12-16 12:06:31.250705'

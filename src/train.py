@@ -1,9 +1,9 @@
 import pandas as pd
-import numpy as np
 import mlflow
 import mlflow.sklearn
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
@@ -12,6 +12,11 @@ import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Set tracking URI to local database to ensure API can find it later
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, 'mlflow.db')
+mlflow.set_tracking_uri(f"sqlite:///{DB_PATH}")
 
 def eval_metrics(actual, pred, pred_proba):
     accuracy = accuracy_score(actual, pred)
@@ -22,8 +27,6 @@ def eval_metrics(actual, pred, pred_proba):
     return accuracy, precision, recall, f1, roc_auc
 
 def train_model():
-    # 1. Load Data
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DATA_PATH = os.path.join(BASE_DIR, 'data', 'processed', 'train_data.csv')
     
     if not os.path.exists(DATA_PATH):
@@ -31,8 +34,7 @@ def train_model():
         
     df = pd.read_csv(DATA_PATH)
     
-    # 2. Prepare Data
-    # Drop ID and String columns automatically
+    # Prepare Data
     non_numeric = df.select_dtypes(include=['object']).columns.tolist()
     id_cols = ['TransactionId', 'BatchId', 'AccountId', 'SubscriptionId', 'CustomerId', 'TransactionStartTime', 'is_high_risk']
     drop_cols = list(set(id_cols + non_numeric))
@@ -43,54 +45,50 @@ def train_model():
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # 3. Setup MLflow
-    mlflow.set_experiment("Credit_Risk_Hyperparameter_Tuning")
+    mlflow.set_experiment("Credit_Risk_Final_Comparison")
     
-    with mlflow.start_run(run_name="RandomForest_Tuned"):
-        logging.info("Starting Hyperparameter Tuning for Random Forest...")
+    # --- Model 1: Logistic Regression (Baseline) ---
+    with mlflow.start_run(run_name="Logistic_Regression_Baseline"):
+        lr_pipe = Pipeline([('scaler', StandardScaler()), ('lr', LogisticRegression(max_iter=1000))])
+        lr_pipe.fit(X_train, y_train)
         
-        # Create a Pipeline (Scaling + Model)
-        # This addresses the 'sklearn Pipeline' feedback
-        pipeline = Pipeline([
-            ('scaler', StandardScaler()),
-            ('rf', RandomForestClassifier(random_state=42))
-        ])
+        y_pred = lr_pipe.predict(X_test)
+        y_proba = lr_pipe.predict_proba(X_test)[:, 1]
         
-        # Define Hyperparameters to search
+        acc, prec, rec, f1, auc = eval_metrics(y_test, y_pred, y_proba)
+        
+        mlflow.log_metric("roc_auc", auc)
+        mlflow.sklearn.log_model(lr_pipe, "model")
+        logging.info(f"Logistic Regression AUC: {auc:.4f}")
+
+    # --- Model 2: Random Forest (Tuned) ---
+    with mlflow.start_run(run_name="RandomForest_Tuned") as run:
+        rf_pipe = Pipeline([('scaler', StandardScaler()), ('rf', RandomForestClassifier(random_state=42))])
+        
         param_grid = {
             'rf__n_estimators': [50, 100],
-            'rf__max_depth': [5, 10, None],
-            'rf__min_samples_split': [2, 5]
+            'rf__max_depth': [5, 10]
         }
         
-        # Run Grid Search
-        grid_search = GridSearchCV(pipeline, param_grid, cv=3, scoring='roc_auc', verbose=1)
-        grid_search.fit(X_train, y_train)
+        grid = GridSearchCV(rf_pipe, param_grid, cv=3, scoring='roc_auc')
+        grid.fit(X_train, y_train)
         
-        best_model = grid_search.best_estimator_
-        best_params = grid_search.best_params_
-        
-        logging.info(f"Best Parameters found: {best_params}")
-        
-        # Predict
+        best_model = grid.best_estimator_
         y_pred = best_model.predict(X_test)
         y_proba = best_model.predict_proba(X_test)[:, 1]
         
-        # Evaluate
         acc, prec, rec, f1, auc = eval_metrics(y_test, y_pred, y_proba)
         
-        # Log Metrics & Params
-        mlflow.log_params(best_params)
-        mlflow.log_metric("accuracy", acc)
-        mlflow.log_metric("precision", prec)
-        mlflow.log_metric("recall", rec)
-        mlflow.log_metric("f1_score", f1)
+        mlflow.log_params(grid.best_params_)
         mlflow.log_metric("roc_auc", auc)
         
-        # Log the Pipeline Model (Scaling included!)
-        mlflow.sklearn.log_model(best_model, "model")
-        
-        logging.info(f"Final Model Metrics - Accuracy: {acc:.4f}, AUC: {auc:.4f}, F1: {f1:.4f}")
+        # REGISTER the best model to the MLflow Registry
+        mlflow.sklearn.log_model(
+            best_model, 
+            "model", 
+            registered_model_name="Credit_Risk_Model_Prod"
+        )
+        logging.info(f"Random Forest AUC: {auc:.4f}. Model registered as 'Credit_Risk_Model_Prod'.")
 
 if __name__ == "__main__":
     train_model()
