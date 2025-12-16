@@ -1,30 +1,49 @@
 from fastapi import FastAPI, HTTPException
-import pickle
+from pydantic import BaseModel
+from typing import Dict, Any
 import pandas as pd
+import mlflow.sklearn
 import os
-from .pydantic_models import CreditScoringRequest, CreditScoringResponse
 
 app = FastAPI(title="Credit Risk Scoring API")
 
-# Load Model and Features at startup
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, 'api', 'model_data.pkl')
+# --- PATH CONFIGURATION ---
+current_dir = os.path.dirname(os.path.abspath(__file__)) 
+src_dir = os.path.dirname(current_dir)
+root_dir = os.path.dirname(src_dir)
 
+# Point to the database in the root folder
+DB_PATH = os.path.join(root_dir, 'mlflow.db')
+mlflow.set_tracking_uri(f"sqlite:///{DB_PATH}")
+
+# Global variable to hold the model
 model = None
-required_features = []
 
+# --- INPUT/OUTPUT MODELS ---
+class CreditScoringRequest(BaseModel):
+    features: Dict[str, Any]
+
+class CreditScoringResponse(BaseModel):
+    is_high_risk: int
+    risk_probability: float
+
+# --- STARTUP EVENT ---
 @app.on_event("startup")
-def load_model():
-    global model, required_features
-    if os.path.exists(MODEL_PATH):
-        with open(MODEL_PATH, 'rb') as f:
-            data = pickle.load(f)
-            model = data["model"]
-            required_features = data["features"]
-        print("Model loaded successfully.")
-    else:
-        print(f"Warning: Model not found at {MODEL_PATH}")
+def load_production_model():
+    global model
+    model_name = "Credit_Risk_Model_Prod"
+    
+    print(f"Connecting to MLflow DB at: {DB_PATH}")
+    
+    try:
+        model_uri = f"models:/{model_name}/Latest"
+        model = mlflow.sklearn.load_model(model_uri)
+        print(f"✅ Successfully loaded '{model_name}' from MLflow Registry.")
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        print("Tip: Ensure you ran 'python src/train.py' first.")
 
+# --- ENDPOINTS ---
 @app.get("/")
 def home():
     return {"message": "Credit Risk Scoring API is Online"}
@@ -32,18 +51,18 @@ def home():
 @app.post("/predict", response_model=CreditScoringResponse)
 def predict(request: CreditScoringRequest):
     if not model:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+        raise HTTPException(status_code=500, detail="Model not loaded. Check server logs.")
     
     try:
-        # Convert input dict to DataFrame
-        input_data = request.features
-        df_input = pd.DataFrame([input_data])
+        # 1. Convert input to DataFrame
+        df_input = pd.DataFrame([request.features])
         
-        # Align columns with training data
-        # This ensures missing columns are filled with 0 (e.g., missing One-Hot columns)
-        df_input = df_input.reindex(columns=required_features, fill_value=0)
+        # 2. Add missing columns with 0
+        if hasattr(model, "feature_names_in_"):
+            expected_cols = model.feature_names_in_
+            df_input = df_input.reindex(columns=expected_cols, fill_value=0)
         
-        # Predict
+        # 3. Predict
         prediction = model.predict(df_input)[0]
         probability = model.predict_proba(df_input)[0][1]
         
@@ -52,4 +71,6 @@ def predict(request: CreditScoringRequest):
             "risk_probability": float(probability)
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"Error: {e}")
+        raise HTTPException(status_code=400, detail=f"Prediction Error: {str(e)}")
+    
